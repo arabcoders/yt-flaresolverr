@@ -25,7 +25,7 @@ This plugin acts as a custom request handler that detects Cloudflare challenge r
 Install directly from the repository:
 
 ```bash
-python -m pip install -U https://github.com/YOUR_USERNAME/yt-flaresolverr/archive/main.zip
+python -m pip install -U https://github.com/arabcoders/yt-flaresolverr/archive/main.zip
 ```
 
 ### Manual Installation
