@@ -4,6 +4,7 @@ import http.cookiejar
 import json
 import logging
 import time
+from pathlib import Path
 import urllib.request
 from collections.abc import Callable
 from os import getenv
@@ -24,64 +25,59 @@ from yt_dlp.networking.exceptions import HTTPError
 from yt_dlp.utils.networking import clean_headers
 
 LOG: logging.Logger = logging.getLogger(__name__)
+LOG.setLevel(logging.DEBUG)
+LOG.addHandler(logging.FileHandler(Path("/tmp/yt_dlp_yt_flaresolverr.log")))
 
 SolverFn = Callable[[Request, Response, RequestHandler], Request | None]
 
-FS_URL = getenv("FLARESOLVERR_URL")
-FS_CLIENT_TIMEOUT = getenv("FLARESOLVERR_CLIENT_TIMEOUT", "60")
-FS_TIMEOUT_DEFAULT = getenv("FLARESOLVERR_CLIENT_TIMEOUT", "60")
-FS_CACHE_TTL = int(getenv("FLARESOLVERR_CACHE_TTL", "300"))
+_CACHE: dict[str, dict[str, Any]] = {}
 
-# Cache structure: {domain: {"solution": dict, "timestamp": float}}
-_solution_cache: dict[str, dict[str, Any]] = {}
+FS_URL: str | None = getenv("FLARESOLVERR_URL")
+FS_CLIENT_TIMEOUT: str = getenv("FLARESOLVERR_CLIENT_TIMEOUT", "60")
+FS_TIMEOUT_DEFAULT: str = getenv("FLARESOLVERR_CLIENT_TIMEOUT", "60")
+FS_CACHE_TTL: int = int(getenv("FLARESOLVERR_CACHE_TTL", "300"))
 
 
-def _get_cached_solution(domain: str) -> dict[str, Any] | None:
-    """Get cached solution if it exists and is not expired."""
-    if domain not in _solution_cache:
+def _get_cached_value(domain: str) -> dict[str, Any] | None:
+    if domain not in _CACHE:
         return None
-    
-    cache_entry = _solution_cache[domain]
-    if time.time() - cache_entry["timestamp"] > FS_CACHE_TTL:
-        # Cache expired, remove it
-        del _solution_cache[domain]
+
+    _entry: dict[str, Any] = _CACHE.get(domain)
+    if time.time() - _entry["timestamp"] > FS_CACHE_TTL:
+        _CACHE.pop(domain, None)
         return None
-    
-    LOG.debug(f"Using cached solution for '{domain}' (age: {int(time.time() - cache_entry['timestamp'])}s)")
-    return cache_entry["solution"]
+
+    return _entry["solution"]
 
 
-def _cache_solution(domain: str, solution: dict[str, Any]) -> None:
-    """Cache a solution for the given domain."""
-    _solution_cache[domain] = {
+def _cache_value(domain: str, solution: dict[str, Any]) -> None:
+    _CACHE[domain] = {
         "solution": solution,
         "timestamp": time.time(),
     }
-    LOG.debug(f"Cached solution for '{domain}'")
 
 
 def cf_solver(
     request: Request, _response: Response, handler: RequestHandler
 ) -> Request | None:
     if not FS_URL:
+        LOG.debug("FlareSolverr URL is not set.")
         return None
 
     parsed_endpoint = urlparse(FS_URL)
     if parsed_endpoint.scheme not in ("http", "https"):
+        LOG.debug(
+            f"FlareSolverr URL scheme '{parsed_endpoint.scheme}' is not supported."
+        )
         return None
 
     if request.data is not None and request.method not in ("GET", None):
+        LOG.debug(
+            f"FlareSolverr does not support requests with data and method '{request.method}'."
+        )
         return None
-    
-    # Check cache first
-    domain = urlparse(request.url).hostname or ""
-    cached_solution = _get_cached_solution(domain)
-    if cached_solution:
-        _cookiejar_from_solution(cached_solution.get("cookies"), request, handler)
-        if ua := cached_solution.get("userAgent"):
-            request.headers["User-Agent"] = ua
-        return request
 
+    domain: str = urlparse(request.url).hostname or ""
     method: str = request.method.lower() if isinstance(request.method, str) else "get"
     if method not in ("get", "head"):
         method = "get"
@@ -118,11 +114,11 @@ def cf_solver(
     )
 
     try:
-        LOG.debug(
+        LOG.info(
             f"Trying to solve Cloudflare challenge for '{request.url}' this may take a while..."
         )
         with urllib.request.urlopen(req, timeout=float(FS_CLIENT_TIMEOUT)) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
+            result: dict = json.loads(resp.read().decode("utf-8"))
     except Exception as e:
         LOG.error(f"FlareSolverr failed to solve challenge for '{request.url}': {e!s}")
         return None
@@ -135,37 +131,18 @@ def cf_solver(
 
     LOG.debug(f"Successfully solved Cloudflare challenge for '{request.url}'.")
 
-    solution = result.get("solution") or {}
-    
-    # Cache the solution
-    _cache_solution(domain, solution)
-    
-    _cookiejar_from_solution(solution.get("cookies"), request, handler)
+    solution: dict[str, Any] = result.get("solution") or {}
+
+    _cache_value(domain, solution)
+
+    _make_cookiejar(solution.get("cookies"), request, handler)
 
     if ua := solution.get("userAgent"):
         request.headers["User-Agent"] = ua
 
     return request
 
-
-def set_cf_handler(solver: SolverFn | None = None) -> type[CFSolverRH]:
-    """
-    Set the Cloudflare handler.
-
-    Args:
-        solver (SolverFn | None): The solver function to use for Cloudflare challenges.
-            If None, the existing solver will be used.
-
-    Returns:
-        type[CloudflareRH]: The Cloudflare request handler class.
-
-    """
-    CFSolverRH.solver = solver or CFSolverRH.solver
-
-    return CFSolverRH
-
-
-def _cookiejar_from_solution(
+def _make_cookiejar(
     cookies, request: Request, handler: RequestHandler
 ) -> None:
     cookiejar = handler._get_cookiejar(request)
@@ -279,11 +256,13 @@ class CFSolverRH(RequestHandler):
         """
         status: int | None = getattr(response, "status", None)
         if status not in (403, 429, 503):
+            LOG.debug(f"Response status {status} is not indicative of Cloudflare.")
             return False
 
         headers = response.headers or {}
         server_header: str = (headers.get("Server") or "").lower()
         if "cloudflare" in server_header:
+            LOG.debug("Detected Cloudflare server header.")
             return True
 
         cf_header_keys: tuple[str, ...] = (
@@ -321,7 +300,16 @@ class CFSolverRH(RequestHandler):
         return director.send(solved_request)
 
     def _send(self, request: Request) -> Response:
+        LOG.debug(f"CFSolverRH handling request to {request.url}")
         director: RequestDirector = self._build_fallback()
+
+        domain: str = urlparse(request.url).hostname or ""
+        cached_solution: dict[str, Any] | None = _get_cached_value(domain)
+        if cached_solution:
+            LOG.debug(f"Injecting cached solution for '{domain}'")
+            _make_cookiejar(cached_solution.get("cookies"), request, self)
+            if ua := cached_solution.get("userAgent"):
+                request.headers["User-Agent"] = ua
 
         try:
             response: Response = director.send(request)
@@ -338,4 +326,4 @@ class CFSolverRH(RequestHandler):
 
 @register_preference(CFSolverRH)
 def _prefer_cf_handler(handler: RequestHandler, _request: Request) -> int:
-    return 0 if not FS_URL else 1000
+    return 500 if FS_URL else 0
