@@ -74,9 +74,6 @@ def cf_solver(
         return None
 
     if request.data is not None and request.method not in ("GET", None):
-        LOG.debug(
-            f"FlareSolverr does not support requests with data and method '{request.method}'."
-        )
         return None
 
     domain: str = urlparse(request.url).hostname or ""
@@ -87,7 +84,7 @@ def cf_solver(
     payload: dict[str, Any] = {
         "cmd": f"request.{method}",
         "url": request.url,
-        "maxTimeout": int(FS_TIMEOUT_DEFAULT * 1000),
+        "maxTimeout": int(FS_TIMEOUT_DEFAULT) * 1000,
     }
 
     cookiejar = handler._get_cookiejar(request)
