@@ -25,8 +25,10 @@ from yt_dlp.networking.exceptions import HTTPError
 from yt_dlp.utils.networking import clean_headers
 
 LOG: logging.Logger = logging.getLogger(__name__)
-LOG.setLevel(logging.DEBUG)
-LOG.addHandler(logging.FileHandler(Path("/tmp/yt_dlp_yt_flaresolverr.log")))
+
+if bool(getenv("FLARESOLVERR_DEBUG", "0")):
+    LOG.setLevel(logging.DEBUG)
+    LOG.addHandler(logging.FileHandler(Path("/tmp/yt-flaresolverr.log")))
 
 SolverFn = Callable[[Request, Response, RequestHandler], Request | None]
 
@@ -142,9 +144,8 @@ def cf_solver(
 
     return request
 
-def _make_cookiejar(
-    cookies, request: Request, handler: RequestHandler
-) -> None:
+
+def _make_cookiejar(cookies, request: Request, handler: RequestHandler) -> None:
     cookiejar = handler._get_cookiejar(request)
     host = urlparse(request.url).hostname or ""
     for cookie in cookies or []:
