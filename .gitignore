@@ -1,0 +1,6 @@
+/uv.lock
+/bundle/
+__pycache__
+*.egg-info/
+*.pyc
+_version.py

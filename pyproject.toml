@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling >=1.9.0, <2", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "yt-flaresolverr"
+description = "Plugin to apply a wake lock during yt-dlp execution"
+readme = "README.md"
+requires-python = ">=3.9"
+dynamic = ["version"]
+license = { file = "LICENSE" }
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "yt_dlp_plugins/postprocessor/yt_flaresolverr/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["yt_dlp_plugins"]
+
+[tool.hatch.envs.default]
+installer = "uv"
+
+[tool.hatch.envs.hatch-static-analysis]
+installer = "uv"
+dependencies = ["ruff"]
+config-path = "pyproject.toml"
